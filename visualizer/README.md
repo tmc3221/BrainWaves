@@ -62,10 +62,15 @@ Use the on-screen sliders to adjust effects in real-time:
 
 The visualizer will attempt to capture audio from:
 
-1. **Primary**: Scarlett audio interface (if connected)
+1. **Primary**: Any available microphone (system default, Scarlett interface, laptop mic, etc.)
 2. **Fallback**: Video audio stream
 
-For best results, connect your audio source to a Scarlett interface before launching.
+The visualizer will automatically detect and use your system's default audio input device. When audio is successfully connected, the device name will be displayed in the UI (e.g., "Audio: Built-in Microphone connected ✓").
+
+For best results with external audio:
+- Connect your audio source (music, instruments, etc.) to your audio interface
+- Make sure the interface is set as the default recording device in your system settings
+- Grant microphone permissions when prompted by the browser
 
 ## Architecture
 
@@ -107,8 +112,11 @@ npm run dev
 ### "No video URL provided" error
 Make sure to pass a video URL via the `--video-url` parameter or use the Python launcher.
 
-### Video won't load
-Some YouTube videos may have restrictions. Try a different video or ensure you have a stable internet connection.
+### Video won't load or "Could not extract functions" error
+The visualizer uses `@distube/ytdl-core` for YouTube streaming. If videos fail to load:
+- Make sure you have the latest dependencies: `cd visualizer && npm install`
+- Some YouTube videos may have restrictions
+- Try a different video or ensure you have a stable internet connection
 
 ### No audio visualization
 Check that your audio device is properly connected and that browser permissions for microphone access are granted.
@@ -117,6 +125,9 @@ Check that your audio device is properly connected and that browser permissions 
 - Reduce effect intensities using the control sliders
 - Lower screen resolution
 - Close other resource-intensive applications
+
+### npm warnings about deprecated packages
+The warning about `boolean@3.2.0` is from a transitive dependency and does not affect functionality.
 
 ## Requirements
 

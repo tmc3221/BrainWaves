@@ -7,7 +7,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const url = require('url');
-const ytdl = require('ytdl-core');
+const ytdl = require('@distube/ytdl-core');
 
 let mainWindow;
 

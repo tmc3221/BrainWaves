@@ -199,7 +199,7 @@ async function setupAudio() {
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.8;
     
-    // Try to get audio from user media (Scarlett interface preferred)
+    // Try to get audio from user media (any available microphone)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
@@ -212,7 +212,10 @@ async function setupAudio() {
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
       
-      updateAudioStatus('Audio: Scarlett interface connected ✓');
+      // Get the audio device label
+      const audioTrack = stream.getAudioTracks()[0];
+      const deviceLabel = audioTrack.label || 'Microphone';
+      updateAudioStatus(`Audio: ${deviceLabel} connected ✓`);
       
     } catch (error) {
       console.warn('Failed to get user media, falling back to video audio:', error);
