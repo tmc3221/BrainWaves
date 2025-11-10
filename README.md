@@ -10,6 +10,7 @@ A Python CLI application that takes any word or phrase, finds semantically adjac
 - 🎬 **Smart YouTube Search**: Automatically excludes commentary, reaction, and review videos
 - 🎲 **Random Discovery**: Returns a random video from the search results
 - 🌐 **Browser Integration**: Opens the selected video directly in your browser
+- 🌊 **Neon Visualizer**: Audio-reactive video visualizer with real-time effects (Xbox 360-style)
 - 🔧 **Modular Design**: Clean architecture ready for Flask/web integration
 - 🔐 **Secure Configuration**: Uses .env files for API key management
 
@@ -84,6 +85,29 @@ brainwaves "meditation sounds"
 # Find jazz-related videos
 brainwaves "bebop jazz"
 ```
+
+### Neon Visualizer
+
+Launch the audio-reactive visualizer with semantic search:
+
+```bash
+# Launch visualizer with BrainWaves search
+python launch_visualizer.py "ambient music"
+
+# Launch with more semantic terms
+python launch_visualizer.py "meditation sounds" --num-terms 5
+
+# Launch with direct YouTube URL
+python launch_visualizer.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+The visualizer features:
+- Real-time audio analysis (bass/mid/high frequencies)
+- Audio-reactive effects: Bloom, RGB Shift, Glitch, Kaleidoscope
+- Interactive controls for effect parameters
+- Supports Scarlett audio interface or system audio
+
+For more details, see [visualizer/README.md](visualizer/README.md).
 
 ## How It Works
 

@@ -1,0 +1,18 @@
+{
+  "name": "brainwaves-neon-visualizer",
+  "version": "1.0.0",
+  "description": "BrainWaves Neon Visualizer - Audio-reactive video visualizer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": ["electron", "visualizer", "audio-reactive", "three.js"],
+  "author": "BrainWaves",
+  "license": "MIT",
+  "dependencies": {
+    "electron": "^28.0.0",
+    "ytdl-core": "^4.11.5",
+    "three": "^0.160.0"
+  }
+}
