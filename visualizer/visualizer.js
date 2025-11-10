@@ -107,34 +107,55 @@ async function setupVideo(videoUrl) {
     videoElement = document.createElement('video');
     videoElement.crossOrigin = 'anonymous';
     videoElement.loop = true;
-    videoElement.muted = false; // We'll use Web Audio API instead
+    videoElement.muted = false;
     videoElement.playsInline = true;
+    videoElement.autoplay = true;
     
-    // Get video info and stream
-    const info = await ytdl.getInfo(videoUrl);
-    const format = ytdl.chooseFormat(info.formats, { quality: 'highestvideo' });
+    // Extract video ID from URL
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error('Invalid YouTube URL');
+    }
+    
+    // Get video info
+    const info = await ytdl.getInfo(videoId);
+    
+    // Choose best video format with audio
+    const format = ytdl.chooseFormat(info.formats, { 
+      quality: 'highest',
+      filter: 'videoandaudio'
+    });
     
     if (!format) {
       throw new Error('No suitable video format found');
     }
     
-    // Stream video using ytdl-core
-    const videoStream = ytdl.downloadFromInfo(info, { format: format });
+    // Use the format URL directly
+    videoElement.src = format.url;
     
-    // Convert stream to blob URL for video element
-    const chunks = [];
-    videoStream.on('data', (chunk) => chunks.push(chunk));
-    videoStream.on('end', () => {
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      const blobUrl = URL.createObjectURL(blob);
-      videoElement.src = blobUrl;
-      videoElement.play();
+    // Wait for video to be ready
+    await new Promise((resolve, reject) => {
+      videoElement.addEventListener('loadeddata', resolve, { once: true });
+      videoElement.addEventListener('error', (e) => {
+        reject(new Error(`Video load error: ${e.message}`));
+      }, { once: true });
+      
+      // Timeout after 30 seconds
+      setTimeout(() => reject(new Error('Video load timeout')), 30000);
     });
+    
+    // Start playback
+    try {
+      await videoElement.play();
+    } catch (e) {
+      console.warn('Autoplay failed, user interaction may be required:', e);
+    }
     
     // Create video texture
     const videoTexture = new THREE.VideoTexture(videoElement);
     videoTexture.minFilter = THREE.LinearFilter;
     videoTexture.magFilter = THREE.LinearFilter;
+    videoTexture.format = THREE.RGBFormat;
     
     // Create plane mesh for video
     const geometry = new THREE.PlaneGeometry(16, 9);
@@ -147,14 +168,7 @@ async function setupVideo(videoUrl) {
     scene.add(videoMesh);
     
     // Scale to fit viewport
-    const aspect = window.innerWidth / window.innerHeight;
-    const videoAspect = 16 / 9;
-    
-    if (aspect > videoAspect) {
-      videoMesh.scale.set(aspect / videoAspect, 1, 1);
-    } else {
-      videoMesh.scale.set(1, videoAspect / aspect, 1);
-    }
+    scaleVideoMesh();
     
     updateStatus('Video streaming active');
     
@@ -162,6 +176,31 @@ async function setupVideo(videoUrl) {
     console.error('Video setup error:', error);
     showError(`Video setup failed: ${error.message}`);
     throw error;
+  }
+}
+
+/**
+ * Extract video ID from YouTube URL
+ */
+function extractVideoId(url) {
+  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  const match = url.match(regex);
+  return match ? match[1] : null;
+}
+
+/**
+ * Scale video mesh to fit viewport
+ */
+function scaleVideoMesh() {
+  if (!videoMesh) return;
+  
+  const aspect = window.innerWidth / window.innerHeight;
+  const videoAspect = 16 / 9;
+  
+  if (aspect > videoAspect) {
+    videoMesh.scale.set(aspect / videoAspect, 1, 1);
+  } else {
+    videoMesh.scale.set(1, videoAspect / aspect, 1);
   }
 }
 
@@ -296,8 +335,24 @@ function setupPostProcessing() {
         return uv;
       }
       
+      // Neon Warp effect - bass-reactive distortion
+      vec2 neonWarp(vec2 uv, float amount) {
+        vec2 center = vec2(0.5, 0.5);
+        vec2 toCenter = uv - center;
+        float dist = length(toCenter);
+        
+        // Create pulsing warp based on bass
+        float warpStrength = amount * bassLevel * sin(time * 2.0 + dist * 10.0);
+        vec2 warp = toCenter * warpStrength * 0.1;
+        
+        return uv + warp;
+      }
+      
       void main() {
         vec2 uv = vUv;
+        
+        // Apply neon warp first for bass-reactive distortion
+        uv = neonWarp(uv, 1.0);
         
         // Apply kaleidoscope
         if (kaleidoscopeSegments > 1.0) {
@@ -315,6 +370,12 @@ function setupPostProcessing() {
         
         // Add neon glow based on high frequencies
         color.rgb += vec3(0.0, 1.0, 1.0) * highLevel * 0.3;
+        
+        // Add neon edge glow
+        vec2 center = vec2(0.5, 0.5);
+        float dist = length(vUv - center);
+        float edgeGlow = smoothstep(0.7, 1.0, dist) * bassLevel;
+        color.rgb += vec3(0.0, 0.8, 1.0) * edgeGlow * 0.5;
         
         gl_FragColor = color;
       }
@@ -431,12 +492,14 @@ function animate() {
  * Render with post-processing effects
  */
 function renderWithEffects() {
-  // For now, just render directly
-  // In a full implementation, you'd render to a texture and apply effects
-  renderer.render(scene, camera);
-  
   // Apply effects via shader if available
-  if (window.effectMaterial && videoMesh) {
+  if (window.effectMaterial && videoMesh && videoMesh.material.map) {
+    // Store original material if not stored yet
+    if (!window.originalMaterial) {
+      window.originalMaterial = videoMesh.material;
+    }
+    
+    // Update shader uniforms
     window.effectMaterial.uniforms.time.value = clock.getElapsedTime();
     window.effectMaterial.uniforms.bassLevel.value = bassLevel;
     window.effectMaterial.uniforms.midLevel.value = midLevel;
@@ -445,11 +508,14 @@ function renderWithEffects() {
     window.effectMaterial.uniforms.rgbShiftAmount.value = params.rgbShift;
     window.effectMaterial.uniforms.glitchAmount.value = params.glitch;
     window.effectMaterial.uniforms.kaleidoscopeSegments.value = params.kaleidoscope;
+    window.effectMaterial.uniforms.tDiffuse.value = window.originalMaterial.map;
     
-    // Apply material to video mesh
+    // Apply shader material
     videoMesh.material = window.effectMaterial;
-    window.effectMaterial.uniforms.tDiffuse.value = videoMesh.material.map;
   }
+  
+  // Render the scene
+  renderer.render(scene, camera);
 }
 
 /**
@@ -461,16 +527,7 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   
   // Update video mesh scale
-  if (videoMesh) {
-    const aspect = window.innerWidth / window.innerHeight;
-    const videoAspect = 16 / 9;
-    
-    if (aspect > videoAspect) {
-      videoMesh.scale.set(aspect / videoAspect, 1, 1);
-    } else {
-      videoMesh.scale.set(1, videoAspect / aspect, 1);
-    }
-  }
+  scaleVideoMesh();
 }
 
 /**
