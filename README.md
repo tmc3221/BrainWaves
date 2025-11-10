@@ -16,18 +16,43 @@ A Python CLI application that takes any word or phrase, finds semantically adjac
 
 ## Installation
 
+### Quick Install (Recommended)
+
+Use the installation script to set up both Python and visualizer dependencies:
+
+```bash
+git clone https://github.com/tmc3221/BrainWaves.git
+cd BrainWaves
+chmod +x install.sh
+./install.sh
+```
+
+Then set up your YouTube API key:
+- Get a YouTube Data API v3 key from [Google Cloud Console](https://console.cloud.google.com/)
+- Copy `.env.example` to `.env`: `cp .env.example .env`
+- Edit `.env` and add your API key: `YOUTUBE_API_KEY=your_actual_api_key_here`
+
+### Manual Installation
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/tmc3221/BrainWaves.git
 cd BrainWaves
 ```
 
-2. Install dependencies:
+2. Install Python dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Set up your YouTube API key:
+3. Install visualizer dependencies (for Neon Visualizer):
+```bash
+cd visualizer
+npm install
+cd ..
+```
+
+4. Set up your YouTube API key:
    - Get a YouTube Data API v3 key from [Google Cloud Console](https://console.cloud.google.com/)
    - Copy `.env.example` to `.env`:
      ```bash
@@ -38,7 +63,7 @@ pip install -r requirements.txt
      YOUTUBE_API_KEY=your_actual_api_key_here
      ```
 
-4. Install the package (optional, for system-wide `brainwaves` command):
+5. Install the package (optional, for system-wide `brainwaves` command):
 ```bash
 pip install -e .
 ```
@@ -175,9 +200,15 @@ def discover(phrase):
 
 ## Requirements
 
+### Core Requirements
 - Python 3.8 or higher
 - YouTube Data API v3 key
 - Internet connection (for downloading word embeddings and API calls)
+
+### Visualizer Requirements
+- Node.js 18+ and npm (for Neon Visualizer)
+- Audio input device (optional, for live audio reactivity)
+- Modern web browser with WebGL support
 
 ## License
 
