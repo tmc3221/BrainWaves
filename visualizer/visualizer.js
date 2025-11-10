@@ -4,8 +4,7 @@
  * Implements Three.js video rendering with audio-reactive post-processing effects
  */
 
-const ytdl = require('ytdl-core');
-const { Readable } = require('stream');
+const { ipcRenderer } = require('electron');
 
 // Global state
 let scene, camera, renderer, videoMesh;
@@ -103,6 +102,15 @@ async function setupVideo(videoUrl) {
   updateStatus('Streaming video from YouTube...');
   
   try {
+    // Request video stream URL from main process
+    const result = await ipcRenderer.invoke('get-video-stream-url', videoUrl);
+    
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+    
+    updateStatus(`Loading: ${result.title || 'video'}...`);
+    
     // Create video element
     videoElement = document.createElement('video');
     videoElement.crossOrigin = 'anonymous';
@@ -111,33 +119,14 @@ async function setupVideo(videoUrl) {
     videoElement.playsInline = true;
     videoElement.autoplay = true;
     
-    // Extract video ID from URL
-    const videoId = extractVideoId(videoUrl);
-    if (!videoId) {
-      throw new Error('Invalid YouTube URL');
-    }
-    
-    // Get video info
-    const info = await ytdl.getInfo(videoId);
-    
-    // Choose best video format with audio
-    const format = ytdl.chooseFormat(info.formats, { 
-      quality: 'highest',
-      filter: 'videoandaudio'
-    });
-    
-    if (!format) {
-      throw new Error('No suitable video format found');
-    }
-    
-    // Use the format URL directly
-    videoElement.src = format.url;
+    // Use the stream URL from main process
+    videoElement.src = result.streamUrl;
     
     // Wait for video to be ready
     await new Promise((resolve, reject) => {
       videoElement.addEventListener('loadeddata', resolve, { once: true });
       videoElement.addEventListener('error', (e) => {
-        reject(new Error(`Video load error: ${e.message}`));
+        reject(new Error(`Video load error: ${e.message || 'Unknown error'}`));
       }, { once: true });
       
       // Timeout after 30 seconds
@@ -177,15 +166,6 @@ async function setupVideo(videoUrl) {
     showError(`Video setup failed: ${error.message}`);
     throw error;
   }
-}
-
-/**
- * Extract video ID from YouTube URL
- */
-function extractVideoId(url) {
-  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-  const match = url.match(regex);
-  return match ? match[1] : null;
 }
 
 /**
