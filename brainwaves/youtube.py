@@ -54,7 +54,6 @@ class YouTubeSearch:
                 part='id,snippet',
                 maxResults=max_results,
                 type='video',
-                videoCategoryId='10',  # Music category
                 safeSearch='moderate'
             ).execute()
             
@@ -77,19 +76,43 @@ class YouTubeSearch:
     def get_random_video(
         self, 
         query: str, 
-        max_results: int = 20
+        max_results: int = 20,
+        original_phrase: Optional[str] = None
     ) -> Optional[Dict[str, str]]:
-        """Search and return a random video.
+        """Search and return a random video with fallback strategy.
         
         Args:
-            query: Search query string
+            query: Search query string (potentially enriched with semantic terms)
             max_results: Maximum number of results to fetch
+            original_phrase: The original user phrase before semantic enrichment
             
         Returns:
             A random video dictionary or None if no videos found
         """
+        # Try the enriched query first
         videos = self.search_videos(query, max_results=max_results)
         
         if videos:
             return random.choice(videos)
+        
+        # Fallback 1: Try without exclusions if we have the original phrase
+        if original_phrase and original_phrase != query:
+            print(f"No results with enriched query. Trying original phrase: '{original_phrase}'")
+            videos = self.search_videos(original_phrase, max_results=max_results)
+            if videos:
+                return random.choice(videos)
+        
+        # Fallback 2: Try the query without commentary exclusions
+        print("Trying without commentary exclusions...")
+        videos = self.search_videos(query, max_results=max_results, exclude_commentary=False)
+        
+        if videos:
+            return random.choice(videos)
+        
+        # Fallback 3: Try original phrase without exclusions
+        if original_phrase and original_phrase != query:
+            videos = self.search_videos(original_phrase, max_results=max_results, exclude_commentary=False)
+            if videos:
+                return random.choice(videos)
+        
         return None

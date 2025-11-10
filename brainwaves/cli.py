@@ -79,7 +79,8 @@ Examples:
         # Get random video
         video = youtube.get_random_video(
             search_query,
-            max_results=args.max_results
+            max_results=args.max_results,
+            original_phrase=args.phrase
         )
         
         if video:
