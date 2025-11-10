@@ -49,41 +49,62 @@ class WordEmbeddings:
             return []
     
     def build_semantic_query(self, phrase: str, num_terms: int = 3) -> str:
-        """Build a pseudo-random search query from a phrase.
+        """Build a vibe-focused search query from a phrase.
+        
+        Uses semantic similarity to find related terms and combines them
+        with visual/audio-focused keywords for better media discovery.
         
         Args:
             phrase: Input word or phrase
             num_terms: Number of semantic terms to include
             
         Returns:
-            A search query string combining original phrase and semantic terms
+            A search query string optimized for visual/audio content
         """
         self._ensure_model_loaded()
         
         # Split phrase into words
         words = phrase.lower().split()
         
-        # Collect similar words for each word in the phrase
+        # Collect similar words for each word in the phrase with higher similarity
         all_similar = []
-        for word in words:
-            similar = self.get_similar_words(word, top_n=15)
-            all_similar.extend(similar)
+        similarity_scores = {}
         
-        # Remove duplicates and select random terms
+        for word in words:
+            similar = self.get_similar_words(word, top_n=20)
+            all_similar.extend(similar)
+            # Track word presence for filtering
+            for sim_word in similar:
+                similarity_scores[sim_word] = similarity_scores.get(sim_word, 0) + 1
+        
+        # Remove duplicates, prioritize words that appear for multiple input words
         unique_similar = list(set(all_similar))
         
-        if unique_similar:
-            # Randomly select some terms
-            selected_terms = random.sample(
-                unique_similar, 
-                min(num_terms, len(unique_similar))
-            )
+        # Filter out overly obscure or irrelevant terms
+        # Keep terms that are more commonly associated with visual/audio content
+        filtered_similar = [w for w in unique_similar if len(w) > 2 and not any(char.isdigit() for char in w)]
+        
+        # Sort by how many input words they're similar to (better relevance)
+        filtered_similar.sort(key=lambda w: similarity_scores.get(w, 0), reverse=True)
+        
+        if filtered_similar:
+            # Select top terms by relevance, not random
+            selected_terms = filtered_similar[:min(num_terms, len(filtered_similar))]
         else:
             # Fallback if no similar words found
             selected_terms = []
         
-        # Build the query
+        # Add vibe-enhancing terms for visual/audio content
+        vibe_terms = ['music', 'visual', 'ambient', 'soundscape', 'audio']
+        # Only add if not already in phrase or selected terms
+        phrase_lower = phrase.lower()
+        for vibe_term in vibe_terms:
+            if vibe_term not in phrase_lower and vibe_term not in selected_terms:
+                selected_terms.append(vibe_term)
+                break  # Add just one vibe term
+        
+        # Build the query - phrase first, then most relevant semantic terms
         query_parts = [phrase]
-        query_parts.extend(selected_terms)
+        query_parts.extend(selected_terms[:num_terms])
         
         return ' '.join(query_parts)
