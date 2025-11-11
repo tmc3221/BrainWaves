@@ -118,9 +118,9 @@ function startNeonVisualizerFor(videoEl) {
   const ctx = canvas.getContext('2d', { alpha: false });
 
   function resize() {
-    // Cap DPR at 1.5 to avoid excessive rendering on high-DPI displays
+    // Cap DPR at 1.25 to avoid excessive rendering on high-DPI displays
     // This significantly improves performance on 2x/3x displays
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     const w = Math.floor(window.innerWidth * dpr);
     const h = Math.floor(window.innerHeight * dpr);
     if (canvas.width !== w || canvas.height !== h) {
@@ -139,7 +139,7 @@ function startNeonVisualizerFor(videoEl) {
   const analyser = audioCtx.createAnalyser();
 
   // FFT size controls number of bars; 2048→1024 bins; we’ll sample fewer
-  analyser.fftSize = 2048;
+  analyser.fftSize = 1024;
   analyser.smoothingTimeConstant = 0.85;
 
   source.connect(analyser);
@@ -194,48 +194,47 @@ function startNeonVisualizerFor(videoEl) {
     const neon = `hsl(${hue.toFixed(1)}, 95%, 60%)`;
     const neonDim = `hsla(${hue.toFixed(1)}, 95%, 60%, 0.4)`;
 
-    // Overglow
+    // Use shadowBlur for glow effect (more efficient than filter blur)
     ctx.globalCompositeOperation = 'screen';
+    ctx.shadowBlur = Math.floor(Math.max(w, h) * 0.015);
+    ctx.shadowColor = neon;
+    ctx.fillStyle = neon;
 
-    for (let pass = 0; pass < GLOW_PASSES; pass++) {
-      const blur = Math.floor(Math.max(w, h) * (pass ? 0.02 : 0.01));
-      ctx.filter = `blur(${blur}px)`;
-      ctx.fillStyle = pass ? neonDim : neon;
+    // Draw glow pass with shadow
+    let x = 0;
+    for (let i = 0; i < bars; i++) {
+      // Map i→log bin index
+      const fIdx = Math.floor(Math.pow(i / (bars - 1), 1.35) * (bins - 1));
+      const v = freq[fIdx] / 255;
 
-      let x = 0;
-      for (let i = 0; i < bars; i++) {
-        // Map i→log bin index
-        const fIdx = Math.floor(Math.pow(i / (bars - 1), 1.35) * (bins - 1));
-        const v = freq[fIdx] / 255;
+      // Shape curve to emphasize mids
+      const shaped = Math.pow(v, EXP);
 
-        // Shape curve to emphasize mids
-        const shaped = Math.pow(v, EXP);
+      const minH = h * FLOOR;
+      const barH = Math.max(minH, shaped * (h * 0.9));
 
-        const minH = h * FLOOR;
-        const barH = Math.max(minH, shaped * (h * 0.9));
+      // Peak caps
+      caps[i] = Math.max(caps[i] - h * CAP_DECAY, barH);
+      const y = h - barH;
 
-        // Peak caps
-        caps[i] = Math.max(caps[i] - h * CAP_DECAY, barH);
-        const y = h - barH;
+      // Rounded rect bars (use capped DPR for consistency)
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+      roundRect(ctx, x, y, barW, barH, ROUND * dpr);
+      ctx.fill();
 
-        // Rounded rect bars (use capped DPR for consistency)
-        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-        roundRect(ctx, x, y, barW, barH, ROUND * dpr);
-        ctx.fill();
+      // Peak cap small rectangles
+      const capH = Math.max(6 * dpr, barW * 0.18);
+      roundRect(ctx, x, h - caps[i] - capH, barW, capH, ROUND * 0.8 * dpr);
+      ctx.fill();
 
-        // Peak cap small rectangles
-        const capH = Math.max(6 * dpr, barW * 0.18);
-        roundRect(ctx, x, h - caps[i] - capH, barW, capH, ROUND * 0.8 * dpr);
-        ctx.fill();
-
-        x += barW + gap;
-      }
+      x += barW + gap;
     }
 
-    // Foreground crisp bars (no blur)
+    // Reset shadow for crisp bars
+    ctx.shadowBlur = 0;
     ctx.filter = 'none';
     ctx.fillStyle = neon;
-    let x = 0;
+    x = 0;
     for (let i = 0; i < bars; i++) {
       const fIdx = Math.floor(Math.pow(i / (bars - 1), 1.35) * (bins - 1));
       const v = freq[fIdx] / 255;
@@ -244,7 +243,7 @@ function startNeonVisualizerFor(videoEl) {
       const barH = Math.max(minH, shaped * (h * 0.9));
       const y = h - barH;
 
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
       roundRect(ctx, x, y, barW, barH, ROUND * dpr);
       ctx.fill();
 
