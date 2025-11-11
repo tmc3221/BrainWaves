@@ -41,6 +41,11 @@ const url = require('url');
   // Avoid importing 'undici' here to prevent early initialization issues.
 })();
 
+// Suppress GPU-related warnings (common on Wayland/Linux)
+// These must be set before app.on('ready')
+app.commandLine.appendSwitch('disable-gpu-vsync');
+app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor');
+
 let mainWindow;
 
 function createWindow() {

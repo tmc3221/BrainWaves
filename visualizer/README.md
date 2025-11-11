@@ -1,22 +1,35 @@
 # BrainWaves Neon Visualizer
 
-An Electron + Three.js audio-reactive video visualizer that creates Xbox 360-style trippy effects synchronized with live audio input.
+An Electron audio-reactive visualizer with canvas-based spectrum analyzer synchronized with YouTube videos.
 
 ## Features
 
-- 🎬 **YouTube Video Streaming**: Streams videos directly using ytdl-core
-- 🎵 **Live Audio Analysis**: Captures audio from Scarlett interface or system audio
-- ✨ **Real-time Effects**: Audio-reactive post-processing including:
-  - Bloom effect (reacts to mid frequencies)
-  - RGB Shift (reacts to bass)
-  - Glitch effect (reacts to high frequencies)
-  - Kaleidoscope effect (segments modulated by bass)
-- 🎮 **Interactive Controls**: Real-time effect parameter adjustment
+- 🎬 **YouTube Video Streaming**: Uses yt-dlp (with @distube/ytdl-core fallback) for robust streaming
+- 🎵 **Live Audio Analysis**: Captures audio from any microphone or system audio
+- ✨ **Real-time Spectrum Analyzer**: Neon-style bars with bloom effects
+- 🎮 **Interactive Controls**: Real-time effect parameter adjustment  
+- ⚡ **Performance Optimized**: Capped DPR and reduced blur passes for smooth 60fps
 - 📊 **Performance Monitoring**: FPS counter and status display
 
 ## Installation
 
-1. Install Node.js dependencies:
+### Prerequisites
+
+**Required:**
+- Node.js 18+ and npm
+
+**Recommended for best video streaming:**
+```bash
+# Install yt-dlp for more reliable YouTube stream extraction
+# On Linux/Mac:
+pip install yt-dlp
+# Or download from: https://github.com/yt-dlp/yt-dlp#installation
+```
+
+If yt-dlp is not available, the visualizer will automatically fall back to @distube/ytdl-core.
+
+### Install Dependencies
+
 ```bash
 cd visualizer
 npm install
@@ -113,18 +126,23 @@ npm run dev
 Make sure to pass a video URL via the `--video-url` parameter or use the Python launcher.
 
 ### Video won't load or "Could not extract functions" error
-The visualizer uses `@distube/ytdl-core` for YouTube streaming. If videos fail to load:
-- Make sure you have the latest dependencies: `cd visualizer && npm install`
+The visualizer prefers `yt-dlp` for robust YouTube streaming and falls back to `@distube/ytdl-core`:
+- **Best solution**: Install yt-dlp: `pip install yt-dlp` (see Installation section above)
+- Ensure you have the latest dependencies: `cd visualizer && npm install`
 - Some YouTube videos may have restrictions
 - Try a different video or ensure you have a stable internet connection
 
+### Performance issues / Laggy rendering
+The visualizer is optimized for smooth 60fps with:
+- DPR capped at 1.5 (reduces pixel count on high-DPI displays)
+- Reduced blur passes (from 2 to 1)
+- If still laggy, close other resource-intensive applications
+
+### GetVSyncParametersIfAvailable errors in terminal
+These are harmless Electron/GPU warnings (common on Wayland/Linux). They're suppressed in the latest version and don't affect functionality.
+
 ### No audio visualization
 Check that your audio device is properly connected and that browser permissions for microphone access are granted.
-
-### Performance issues
-- Reduce effect intensities using the control sliders
-- Lower screen resolution
-- Close other resource-intensive applications
 
 ### npm warnings about deprecated packages
 The warning about `boolean@3.2.0` is from a transitive dependency and does not affect functionality.

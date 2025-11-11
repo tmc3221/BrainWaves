@@ -118,7 +118,9 @@ function startNeonVisualizerFor(videoEl) {
   const ctx = canvas.getContext('2d', { alpha: false });
 
   function resize() {
-    const dpr = window.devicePixelRatio || 1;
+    // Cap DPR at 1.5 to avoid excessive rendering on high-DPI displays
+    // This significantly improves performance on 2x/3x displays
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const w = Math.floor(window.innerWidth * dpr);
     const h = Math.floor(window.innerHeight * dpr);
     if (canvas.width !== w || canvas.height !== h) {
@@ -148,7 +150,7 @@ function startNeonVisualizerFor(videoEl) {
 
   // Visual params
   const BAR_GROUPS = 96;         // number of bars
-  const GLOW_PASSES = 2;         // extra glow blurs
+  const GLOW_PASSES = 1;         // reduced from 2 for better performance
   const BASE_HUE = 170;          // teal/blue base; we’ll oscillate
   const HUE_SWAY = 55;           // color sway around base
   const ROUND = 12;              // bar corner radius in px (at 1x)
@@ -216,13 +218,14 @@ function startNeonVisualizerFor(videoEl) {
         caps[i] = Math.max(caps[i] - h * CAP_DECAY, barH);
         const y = h - barH;
 
-        // Rounded rect bars
-        roundRect(ctx, x, y, barW, barH, ROUND * (window.devicePixelRatio || 1));
+        // Rounded rect bars (use capped DPR for consistency)
+        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        roundRect(ctx, x, y, barW, barH, ROUND * dpr);
         ctx.fill();
 
         // Peak cap small rectangles
-        const capH = Math.max(6 * (window.devicePixelRatio || 1), barW * 0.18);
-        roundRect(ctx, x, h - caps[i] - capH, barW, capH, ROUND * 0.8 * (window.devicePixelRatio || 1));
+        const capH = Math.max(6 * dpr, barW * 0.18);
+        roundRect(ctx, x, h - caps[i] - capH, barW, capH, ROUND * 0.8 * dpr);
         ctx.fill();
 
         x += barW + gap;
@@ -241,7 +244,8 @@ function startNeonVisualizerFor(videoEl) {
       const barH = Math.max(minH, shaped * (h * 0.9));
       const y = h - barH;
 
-      roundRect(ctx, x, y, barW, barH, ROUND * (window.devicePixelRatio || 1));
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      roundRect(ctx, x, y, barW, barH, ROUND * dpr);
       ctx.fill();
 
       x += barW + gap;
