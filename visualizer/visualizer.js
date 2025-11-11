@@ -1,547 +1,323 @@
-/**
- * BrainWaves Neon Visualizer - Main Renderer
- * 
- * Implements Three.js video rendering with audio-reactive post-processing effects
- */
+// visualizer.js
+// Renderer process script for BrainWaves Neon Visualizer
 
 const { ipcRenderer } = require('electron');
 
-// Global state
-let scene, camera, renderer, videoMesh;
-let videoElement, audioContext, analyser;
-let bassLevel = 0, midLevel = 0, highLevel = 0;
-let composer, bloomPass, rgbShiftPass, glitchPass;
-let clock, frameCount = 0;
-let lastFpsUpdate = 0;
-
-// Effect parameters
-let params = {
-  bloom: 1.5,
-  rgbShift: 0.005,
-  glitch: 0.3,
-  kaleidoscope: 6
-};
-
-/**
- * Initialize the visualizer
+/** ---------------------------
+ *  DOM bootstrap
+ *  ---------------------------
  */
-async function init() {
-  try {
-    updateStatus('Setting up Three.js scene...');
-    
-    // Get video URL from query parameters
-    const urlParams = new URLSearchParams(window.location.search);
-    const videoUrl = urlParams.get('video');
-    
-    if (!videoUrl) {
-      showError('No video URL provided. Please pass a YouTube URL via --video-url parameter.');
-      return;
-    }
+const root = document.body;
+root.style.margin = '0';
+root.style.overflow = 'hidden';
+root.style.background = '#000';
 
-    // Setup Three.js scene
-    setupScene();
-    
-    // Setup audio capture
-    await setupAudio();
-    
-    // Setup video streaming
-    await setupVideo(videoUrl);
-    
-    // Setup post-processing effects
-    setupPostProcessing();
-    
-    // Setup controls
-    setupControls();
-    
-    // Handle window resize
-    window.addEventListener('resize', onWindowResize, false);
-    
-    updateStatus('Ready! Enjoy the vibes...');
-    hideLoading();
-    
-    // Start animation loop
-    animate();
-    
-  } catch (error) {
-    console.error('Initialization error:', error);
-    showError(`Failed to initialize: ${error.message}`);
-  }
+const statusBar = document.createElement('div');
+statusBar.style.position = 'fixed';
+statusBar.style.left = '12px';
+statusBar.style.bottom = '12px';
+statusBar.style.padding = '6px 10px';
+statusBar.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+statusBar.style.fontSize = '12px';
+statusBar.style.color = '#9ae6b4';
+statusBar.style.background = 'rgba(0,0,0,0.35)';
+statusBar.style.border = '1px solid rgba(255,255,255,0.08)';
+statusBar.style.borderRadius = '8px';
+statusBar.style.pointerEvents = 'none';
+statusBar.textContent = 'Waiting for video…';
+root.appendChild(statusBar);
+
+const canvas = document.createElement('canvas');
+canvas.id = 'neon-canvas';
+canvas.style.position = 'fixed';
+canvas.style.left = 0;
+canvas.style.top = 0;
+canvas.style.width = '100vw';
+canvas.style.height = '100vh';
+canvas.style.display = 'block';
+root.appendChild(canvas);
+
+const video = document.createElement('video');
+video.id = 'video';
+video.style.position = 'fixed';
+video.style.left = 0;
+video.style.top = 0;
+video.style.width = '100vw';
+video.style.height = '100vh';
+video.style.objectFit = 'cover';
+video.style.opacity = '0.35'; // let neon show through
+video.muted = true;           // allow autoplay
+video.playsInline = true;
+video.controls = false;
+video.autoplay = true;
+video.crossOrigin = 'anonymous'; // needed for WebAudio if CORS allows
+root.appendChild(video);
+
+// Toggle mute on click
+root.addEventListener('click', () => {
+  // Try unmuting on user gesture
+  if (video.muted) video.muted = false;
+});
+
+/** ---------------------------
+ *  Utils
+ *  ---------------------------
+ */
+function setStatus(msg, color = '#9ae6b4') {
+  statusBar.textContent = msg;
+  statusBar.style.color = color;
 }
 
-/**
- * Setup Three.js scene
- */
-function setupScene() {
-  // Scene
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
-  
-  // Camera
-  camera = new THREE.PerspectiveCamera(
-    75,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    1000
-  );
-  camera.position.z = 2;
-  
-  // Renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
-  document.getElementById('container').appendChild(renderer.domElement);
-  
-  // Clock for animations
-  clock = new THREE.Clock();
+function getQueryParam(name) {
+  const u = new URL(window.location.href);
+  return u.searchParams.get(name);
 }
 
-/**
- * Setup video streaming from YouTube
+/** ---------------------------
+ *  Resolve video URL and request stream URL
+ *  ---------------------------
  */
-async function setupVideo(videoUrl) {
-  updateStatus('Streaming video from YouTube...');
-  
-  try {
-    // Request video stream URL from main process
-    const result = await ipcRenderer.invoke('get-video-stream-url', videoUrl);
-    
-    if (!result.success) {
-      throw new Error(result.error);
-    }
-    
-    updateStatus(`Loading: ${result.title || 'video'}...`);
-    
-    // Create video element
-    videoElement = document.createElement('video');
-    videoElement.crossOrigin = 'anonymous';
-    videoElement.loop = true;
-    videoElement.muted = false;
-    videoElement.playsInline = true;
-    videoElement.autoplay = true;
-    
-    // Use the stream URL from main process
-    videoElement.src = result.streamUrl;
-    
-    // Wait for video to be ready
-    await new Promise((resolve, reject) => {
-      videoElement.addEventListener('loadeddata', resolve, { once: true });
-      videoElement.addEventListener('error', (e) => {
-        reject(new Error(`Video load error: ${e.message || 'Unknown error'}`));
-      }, { once: true });
-      
-      // Timeout after 30 seconds
-      setTimeout(() => reject(new Error('Video load timeout')), 30000);
+async function resolveVideoToStreamUrl() {
+  let youtubeUrl = getQueryParam('video');
+
+  if (!youtubeUrl) {
+    // ask main if it got one from argv
+    youtubeUrl = await new Promise((resolve) => {
+      ipcRenderer.once('video-url', (_evt, url) => resolve(url || null));
+      ipcRenderer.send('get-video-url');
     });
-    
-    // Start playback
-    try {
-      await videoElement.play();
-    } catch (e) {
-      console.warn('Autoplay failed, user interaction may be required:', e);
+  }
+
+  if (!youtubeUrl) {
+    throw new Error('No YouTube URL provided.');
+  }
+
+  setStatus('Requesting stream URL…');
+
+  const res = await ipcRenderer.invoke('get-video-stream-url', youtubeUrl);
+  if (!res || !res.success || !res.streamUrl) {
+    const err = res && res.error ? res.error : 'Unknown stream resolution error.';
+    throw new Error(err);
+  }
+
+  return {
+    streamUrl: res.streamUrl,
+    title: res.title || 'YouTube',
+    duration: res.duration ? Number(res.duration) : null,
+    youtubeUrl
+  };
+}
+
+/** ---------------------------
+ *  WebAudio + Neon Visualizer
+ *  ---------------------------
+ */
+let rafId = null;
+
+function startNeonVisualizerFor(videoEl) {
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
     }
-    
-    // Create video texture
-    const videoTexture = new THREE.VideoTexture(videoElement);
-    videoTexture.minFilter = THREE.LinearFilter;
-    videoTexture.magFilter = THREE.LinearFilter;
-    videoTexture.format = THREE.RGBFormat;
-    
-    // Create plane mesh for video
-    const geometry = new THREE.PlaneGeometry(16, 9);
-    const material = new THREE.MeshBasicMaterial({ 
-      map: videoTexture,
-      side: THREE.DoubleSide
-    });
-    
-    videoMesh = new THREE.Mesh(geometry, material);
-    scene.add(videoMesh);
-    
-    // Scale to fit viewport
-    scaleVideoMesh();
-    
-    updateStatus('Video streaming active');
-    
-  } catch (error) {
-    console.error('Video setup error:', error);
-    showError(`Video setup failed: ${error.message}`);
-    throw error;
   }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioCtx();
+
+  // Create source & analyser
+  const source = audioCtx.createMediaElementSource(videoEl);
+  const analyser = audioCtx.createAnalyser();
+
+  // FFT size controls number of bars; 2048→1024 bins; we’ll sample fewer
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.85;
+
+  source.connect(analyser);
+  // Still route to destination so the user hears audio
+  analyser.connect(audioCtx.destination);
+
+  const freq = new Uint8Array(analyser.frequencyBinCount);
+
+  // Visual params
+  const BAR_GROUPS = 96;         // number of bars
+  const GLOW_PASSES = 2;         // extra glow blurs
+  const BASE_HUE = 170;          // teal/blue base; we’ll oscillate
+  const HUE_SWAY = 55;           // color sway around base
+  const ROUND = 12;              // bar corner radius in px (at 1x)
+  const FLOOR = 0.08;            // minimum bar height as a fraction of screen
+  const EXP = 1.28;              // emphasize mids with exponent
+  const CAP_DECAY = 0.02;        // decay speed for peak caps
+
+  // Peak caps (like classic spectrum analyzers)
+  const caps = new Float32Array(BAR_GROUPS).fill(0);
+
+  function drawFrame() {
+    rafId = requestAnimationFrame(drawFrame);
+
+    analyser.getByteFrequencyData(freq);
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Background radial gradient
+    const g = ctx.createRadialGradient(
+      w * 0.5, h * 0.5, Math.min(w, h) * 0.1,
+      w * 0.5, h * 0.5, Math.max(w, h) * 0.7
+    );
+    g.addColorStop(0, '#000000');
+    g.addColorStop(1, '#000000');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // Compute bars from frequency bins (log-ish sampling)
+    const bins = freq.length;
+    const bars = BAR_GROUPS;
+    const barW = (w / bars) * 0.75;
+    const gap = (w / bars) * 0.25;
+
+    // Color pulse over time with audio energy
+    let energy = 0;
+    for (let i = 0; i < bins; i++) energy += freq[i];
+    energy /= (bins * 255);
+    const t = performance.now() * 0.001;
+    const hue = BASE_HUE + Math.sin(t * 0.75 + energy * 2.5) * HUE_SWAY;
+    const neon = `hsl(${hue.toFixed(1)}, 95%, 60%)`;
+    const neonDim = `hsla(${hue.toFixed(1)}, 95%, 60%, 0.4)`;
+
+    // Overglow
+    ctx.globalCompositeOperation = 'screen';
+
+    for (let pass = 0; pass < GLOW_PASSES; pass++) {
+      const blur = Math.floor(Math.max(w, h) * (pass ? 0.02 : 0.01));
+      ctx.filter = `blur(${blur}px)`;
+      ctx.fillStyle = pass ? neonDim : neon;
+
+      let x = 0;
+      for (let i = 0; i < bars; i++) {
+        // Map i→log bin index
+        const fIdx = Math.floor(Math.pow(i / (bars - 1), 1.35) * (bins - 1));
+        const v = freq[fIdx] / 255;
+
+        // Shape curve to emphasize mids
+        const shaped = Math.pow(v, EXP);
+
+        const minH = h * FLOOR;
+        const barH = Math.max(minH, shaped * (h * 0.9));
+
+        // Peak caps
+        caps[i] = Math.max(caps[i] - h * CAP_DECAY, barH);
+        const y = h - barH;
+
+        // Rounded rect bars
+        roundRect(ctx, x, y, barW, barH, ROUND * (window.devicePixelRatio || 1));
+        ctx.fill();
+
+        // Peak cap small rectangles
+        const capH = Math.max(6 * (window.devicePixelRatio || 1), barW * 0.18);
+        roundRect(ctx, x, h - caps[i] - capH, barW, capH, ROUND * 0.8 * (window.devicePixelRatio || 1));
+        ctx.fill();
+
+        x += barW + gap;
+      }
+    }
+
+    // Foreground crisp bars (no blur)
+    ctx.filter = 'none';
+    ctx.fillStyle = neon;
+    let x = 0;
+    for (let i = 0; i < bars; i++) {
+      const fIdx = Math.floor(Math.pow(i / (bars - 1), 1.35) * (bins - 1));
+      const v = freq[fIdx] / 255;
+      const shaped = Math.pow(v, EXP);
+      const minH = h * FLOOR;
+      const barH = Math.max(minH, shaped * (h * 0.9));
+      const y = h - barH;
+
+      roundRect(ctx, x, y, barW, barH, ROUND * (window.devicePixelRatio || 1));
+      ctx.fill();
+
+      x += barW + gap;
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // Kick audio after first user gesture if autoplay blocks audio context
+  const resumeAudio = async () => {
+    try {
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+    } catch {}
+  };
+  window.addEventListener('click', resumeAudio, { once: true });
+  window.addEventListener('keydown', resumeAudio, { once: true });
+
+  drawFrame();
+
+  return () => {
+    window.removeEventListener('resize', resize);
+    if (rafId) cancelAnimationFrame(rafId);
+    try { source.disconnect(); } catch {}
+    try { analyser.disconnect(); } catch {}
+    try { audioCtx.close(); } catch {}
+  };
 }
 
-/**
- * Scale video mesh to fit viewport
- */
-function scaleVideoMesh() {
-  if (!videoMesh) return;
-  
-  const aspect = window.innerWidth / window.innerHeight;
-  const videoAspect = 16 / 9;
-  
-  if (aspect > videoAspect) {
-    videoMesh.scale.set(aspect / videoAspect, 1, 1);
-  } else {
-    videoMesh.scale.set(1, videoAspect / aspect, 1);
-  }
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, Math.min(w, h) * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }
 
-/**
- * Setup audio capture and analysis
+/** ---------------------------
+ *  Boot
+ *  ---------------------------
  */
-async function setupAudio() {
-  updateStatus('Setting up audio capture...');
-  
+(async function boot() {
   try {
-    // Create audio context
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    
-    // Create analyser node
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.8;
-    
-    // Try to get audio from user media (any available microphone)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        } 
-      });
-      
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-      
-      // Get the audio device label
-      const audioTrack = stream.getAudioTracks()[0];
-      const deviceLabel = audioTrack.label || 'Microphone';
-      updateAudioStatus(`Audio: ${deviceLabel} connected ✓`);
-      
-    } catch (error) {
-      console.warn('Failed to get user media, falling back to video audio:', error);
-      
-      // Fallback to video element audio
-      if (videoElement) {
-        const source = audioContext.createMediaElementSource(videoElement);
-        source.connect(analyser);
-        analyser.connect(audioContext.destination);
-        updateAudioStatus('Audio: Video audio connected');
-      }
-    }
-    
-  } catch (error) {
-    console.error('Audio setup error:', error);
-    updateAudioStatus('Audio: Failed to connect');
+    setStatus('Resolving video…');
+
+    const { streamUrl, title, duration, youtubeUrl } = await resolveVideoToStreamUrl();
+
+    // Prefer direct stream; if it fails, fallback to YouTube page URL (non-analyzable)
+    const src = streamUrl || youtubeUrl;
+
+    // Some direct links require referrer; Electron usually forwards it fine.
+    // Set source and play
+    video.src = src;
+
+    // Attempt to start (muted)
+    await video.play().catch(() => { /* ignore, gesture may be required */ });
+
+    // Title feedback
+    const durText = duration ? ` • ${Math.round(duration / 60)}m` : '';
+    setStatus(`Playing: ${title}${durText}`);
+
+    // Start visualizer
+    startNeonVisualizerFor(video);
+
+  } catch (err) {
+    console.error(err);
+    setStatus(`Error: ${err.message}`, '#fca5a5');
+    // Last resort: display a message and leave canvas background as-is
   }
-}
+})();
 
-/**
- * Setup post-processing effects
- */
-function setupPostProcessing() {
-  updateStatus('Setting up effects...');
-  
-  // Note: For a production app, you'd use EffectComposer from three/examples/jsm/postprocessing
-  // For this implementation, we'll apply effects via custom shaders
-  
-  // Create custom shader material for effects
-  const effectMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      tDiffuse: { value: null },
-      time: { value: 0 },
-      bassLevel: { value: 0 },
-      midLevel: { value: 0 },
-      highLevel: { value: 0 },
-      bloomStrength: { value: params.bloom },
-      rgbShiftAmount: { value: params.rgbShift },
-      glitchAmount: { value: params.glitch },
-      kaleidoscopeSegments: { value: params.kaleidoscope }
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform sampler2D tDiffuse;
-      uniform float time;
-      uniform float bassLevel;
-      uniform float midLevel;
-      uniform float highLevel;
-      uniform float bloomStrength;
-      uniform float rgbShiftAmount;
-      uniform float glitchAmount;
-      uniform float kaleidoscopeSegments;
-      
-      varying vec2 vUv;
-      
-      // Kaleidoscope effect
-      vec2 kaleidoscope(vec2 uv, float segments) {
-        vec2 center = vec2(0.5, 0.5);
-        vec2 toCenter = uv - center;
-        float angle = atan(toCenter.y, toCenter.x);
-        float radius = length(toCenter);
-        
-        float segmentAngle = 6.28318530718 / segments;
-        angle = mod(angle, segmentAngle);
-        if (mod(floor((atan(toCenter.y, toCenter.x) / segmentAngle)), 2.0) == 1.0) {
-          angle = segmentAngle - angle;
-        }
-        
-        return center + radius * vec2(cos(angle), sin(angle));
-      }
-      
-      // RGB Shift effect
-      vec4 rgbShift(sampler2D tex, vec2 uv, float amount) {
-        float r = texture2D(tex, uv + vec2(amount * bassLevel, 0.0)).r;
-        float g = texture2D(tex, uv).g;
-        float b = texture2D(tex, uv - vec2(amount * bassLevel, 0.0)).b;
-        return vec4(r, g, b, 1.0);
-      }
-      
-      // Simple bloom
-      vec4 bloom(vec4 color, float strength) {
-        float brightness = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-        if (brightness > 0.5) {
-          return color * (1.0 + strength * midLevel);
-        }
-        return color;
-      }
-      
-      // Glitch effect
-      vec2 glitch(vec2 uv, float amount) {
-        if (amount > 0.5 && mod(uv.y * 100.0 + time * 10.0, 1.0) < amount * highLevel) {
-          return vec2(uv.x + (fract(sin(uv.y * 100.0) * 43758.5453) - 0.5) * 0.1 * amount, uv.y);
-        }
-        return uv;
-      }
-      
-      // Neon Warp effect - bass-reactive distortion
-      vec2 neonWarp(vec2 uv, float amount) {
-        vec2 center = vec2(0.5, 0.5);
-        vec2 toCenter = uv - center;
-        float dist = length(toCenter);
-        
-        // Create pulsing warp based on bass
-        float warpStrength = amount * bassLevel * sin(time * 2.0 + dist * 10.0);
-        vec2 warp = toCenter * warpStrength * 0.1;
-        
-        return uv + warp;
-      }
-      
-      void main() {
-        vec2 uv = vUv;
-        
-        // Apply neon warp first for bass-reactive distortion
-        uv = neonWarp(uv, 1.0);
-        
-        // Apply kaleidoscope
-        if (kaleidoscopeSegments > 1.0) {
-          uv = kaleidoscope(uv, kaleidoscopeSegments * (1.0 + bassLevel * 0.5));
-        }
-        
-        // Apply glitch
-        uv = glitch(uv, glitchAmount);
-        
-        // Get color with RGB shift
-        vec4 color = rgbShift(tDiffuse, uv, rgbShiftAmount);
-        
-        // Apply bloom
-        color = bloom(color, bloomStrength);
-        
-        // Add neon glow based on high frequencies
-        color.rgb += vec3(0.0, 1.0, 1.0) * highLevel * 0.3;
-        
-        // Add neon edge glow
-        vec2 center = vec2(0.5, 0.5);
-        float dist = length(vUv - center);
-        float edgeGlow = smoothstep(0.7, 1.0, dist) * bassLevel;
-        color.rgb += vec3(0.0, 0.8, 1.0) * edgeGlow * 0.5;
-        
-        gl_FragColor = color;
-      }
-    `
-  });
-  
-  // Store for later use in render loop
-  window.effectMaterial = effectMaterial;
-}
-
-/**
- * Setup UI controls
- */
-function setupControls() {
-  // Bloom
-  const bloomSlider = document.getElementById('bloom');
-  const bloomValue = document.getElementById('bloom-value');
-  bloomSlider.addEventListener('input', (e) => {
-    params.bloom = parseFloat(e.target.value);
-    bloomValue.textContent = params.bloom.toFixed(1);
-  });
-  
-  // RGB Shift
-  const rgbShiftSlider = document.getElementById('rgbshift');
-  const rgbShiftValue = document.getElementById('rgbshift-value');
-  rgbShiftSlider.addEventListener('input', (e) => {
-    params.rgbShift = parseFloat(e.target.value);
-    rgbShiftValue.textContent = params.rgbShift.toFixed(3);
-  });
-  
-  // Glitch
-  const glitchSlider = document.getElementById('glitch');
-  const glitchValue = document.getElementById('glitch-value');
-  glitchSlider.addEventListener('input', (e) => {
-    params.glitch = parseFloat(e.target.value);
-    glitchValue.textContent = params.glitch.toFixed(1);
-  });
-  
-  // Kaleidoscope
-  const kaleidoscopeSlider = document.getElementById('kaleidoscope');
-  const kaleidoscopeValue = document.getElementById('kaleidoscope-value');
-  kaleidoscopeSlider.addEventListener('input', (e) => {
-    params.kaleidoscope = parseInt(e.target.value);
-    kaleidoscopeValue.textContent = params.kaleidoscope;
-  });
-}
-
-/**
- * Analyze audio frequencies
- */
-function analyzeAudio() {
-  if (!analyser) return;
-  
-  const bufferLength = analyser.frequencyBinCount;
-  const dataArray = new Uint8Array(bufferLength);
-  analyser.getByteFrequencyData(dataArray);
-  
-  // Split into frequency bands
-  const bassEnd = Math.floor(bufferLength * 0.1);
-  const midEnd = Math.floor(bufferLength * 0.5);
-  
-  // Calculate average levels for each band
-  let bass = 0, mid = 0, high = 0;
-  
-  for (let i = 0; i < bassEnd; i++) {
-    bass += dataArray[i];
-  }
-  bass = (bass / bassEnd) / 255.0;
-  
-  for (let i = bassEnd; i < midEnd; i++) {
-    mid += dataArray[i];
-  }
-  mid = (mid / (midEnd - bassEnd)) / 255.0;
-  
-  for (let i = midEnd; i < bufferLength; i++) {
-    high += dataArray[i];
-  }
-  high = (high / (bufferLength - midEnd)) / 255.0;
-  
-  // Smooth transitions
-  bassLevel = bassLevel * 0.7 + bass * 0.3;
-  midLevel = midLevel * 0.7 + mid * 0.3;
-  highLevel = highLevel * 0.7 + high * 0.3;
-}
-
-/**
- * Animation loop
- */
-function animate() {
-  requestAnimationFrame(animate);
-  
-  // Analyze audio
-  analyzeAudio();
-  
-  // Update mesh rotation based on bass
-  if (videoMesh) {
-    videoMesh.rotation.z = Math.sin(clock.getElapsedTime() * 0.5) * 0.05 * bassLevel;
-  }
-  
-  // Render with effects
-  renderWithEffects();
-  
-  // Update FPS counter
-  frameCount++;
-  const now = performance.now();
-  if (now - lastFpsUpdate > 1000) {
-    updateFPS(frameCount);
-    frameCount = 0;
-    lastFpsUpdate = now;
-  }
-}
-
-/**
- * Render with post-processing effects
- */
-function renderWithEffects() {
-  // Apply effects via shader if available
-  if (window.effectMaterial && videoMesh && videoMesh.material.map) {
-    // Store original material if not stored yet
-    if (!window.originalMaterial) {
-      window.originalMaterial = videoMesh.material;
-    }
-    
-    // Update shader uniforms
-    window.effectMaterial.uniforms.time.value = clock.getElapsedTime();
-    window.effectMaterial.uniforms.bassLevel.value = bassLevel;
-    window.effectMaterial.uniforms.midLevel.value = midLevel;
-    window.effectMaterial.uniforms.highLevel.value = highLevel;
-    window.effectMaterial.uniforms.bloomStrength.value = params.bloom;
-    window.effectMaterial.uniforms.rgbShiftAmount.value = params.rgbShift;
-    window.effectMaterial.uniforms.glitchAmount.value = params.glitch;
-    window.effectMaterial.uniforms.kaleidoscopeSegments.value = params.kaleidoscope;
-    window.effectMaterial.uniforms.tDiffuse.value = window.originalMaterial.map;
-    
-    // Apply shader material
-    videoMesh.material = window.effectMaterial;
-  }
-  
-  // Render the scene
-  renderer.render(scene, camera);
-}
-
-/**
- * Handle window resize
- */
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  
-  // Update video mesh scale
-  scaleVideoMesh();
-}
-
-/**
- * UI Helper Functions
- */
-function updateStatus(message) {
-  document.getElementById('status').textContent = message;
-}
-
-function updateAudioStatus(message) {
-  document.getElementById('audio-status').textContent = message;
-}
-
-function updateFPS(fps) {
-  document.getElementById('fps').textContent = `FPS: ${fps}`;
-}
-
-function showError(message) {
-  const errorDiv = document.getElementById('error');
-  errorDiv.textContent = message;
-  errorDiv.style.display = 'block';
-  hideLoading();
-}
-
-function hideLoading() {
-  document.getElementById('loading').classList.add('hidden');
-}
-
-// Initialize when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}

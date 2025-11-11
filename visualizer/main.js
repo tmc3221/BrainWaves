@@ -1,13 +1,45 @@
 /**
  * BrainWaves Neon Visualizer - Electron Main Process
- * 
+ *
  * Handles window creation and app lifecycle
  */
 
 const { app, BrowserWindow, ipcMain } = require('electron');
+const { execFile } = require('child_process');
 const path = require('path');
 const url = require('url');
-const ytdl = require('@distube/ytdl-core');
+
+/**
+ * Minimal browser global polyfills for Electron's main (Node) context.
+ * We avoid requiring 'undici' here (that itself may assume File exists).
+ * Define File (and Blob if needed) *before* any module that might import undici.
+ */
+(function ensureWebLikeGlobals() {
+  // Provide Blob via Node's buffer module if missing
+  if (typeof globalThis.Blob === 'undefined') {
+    const { Blob } = require('buffer');
+    globalThis.Blob = Blob;
+  }
+
+  // Provide a minimal File that satisfies libraries checking for its existence
+  if (typeof globalThis.File === 'undefined') {
+    const { Blob } = require('buffer');
+    class File extends Blob {
+      constructor(bits = [], name = '', opts = {}) {
+        super(bits, opts);
+        this.name = String(name);
+        this.lastModified = opts.lastModified ?? Date.now();
+      }
+      get [Symbol.toStringTag]() {
+        return 'File';
+      }
+    }
+    globalThis.File = File;
+  }
+
+  // (Optional) Add fetch/FormData/etc. only if you later need them in main.
+  // Avoid importing 'undici' here to prevent early initialization issues.
+})();
 
 let mainWindow;
 
@@ -29,7 +61,7 @@ function createWindow() {
   // Parse command line arguments or use default
   const args = process.argv.slice(1);
   let videoUrl = null;
-  
+
   // Look for --video-url parameter
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--video-url' && i + 1 < args.length) {
@@ -77,64 +109,90 @@ app.on('activate', () => {
 ipcMain.on('get-video-url', (event) => {
   const args = process.argv.slice(1);
   let videoUrl = null;
-  
+
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--video-url' && i + 1 < args.length) {
       videoUrl = args[i + 1];
       break;
     }
   }
-  
+
   event.reply('video-url', videoUrl);
 });
 
 // Handle video stream URL extraction from YouTube
 ipcMain.handle('get-video-stream-url', async (event, youtubeUrl) => {
-  try {
-    console.log('Extracting video stream URL from:', youtubeUrl);
-    
-    // Extract video ID
-    const videoId = extractVideoId(youtubeUrl);
-    if (!videoId) {
-      throw new Error('Invalid YouTube URL');
-    }
-    
-    // Get video info
-    const info = await ytdl.getInfo(videoId);
-    
-    // Choose best video format with audio
-    const format = ytdl.chooseFormat(info.formats, { 
+  const tryYtDlp = async () => {
+    // Ask yt-dlp for ONE direct URL, preferring a muxed MP4.
+    // If no mp4, take best available single URL.
+    const args = ['-g', '-f', 'best[ext=mp4]/best', youtubeUrl];
+
+    return new Promise((resolve, reject) => {
+      execFile('yt-dlp', args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) return reject(new Error(`yt-dlp failed: ${stderr || err.message}`));
+        const lines = stdout.trim().split('\n').filter(Boolean);
+        if (lines.length === 0) return reject(new Error('yt-dlp returned no URLs'));
+
+        // We requested a single muxed format; take the first line.
+        const streamUrl = lines[0];
+
+        resolve({
+          streamUrl,
+          title: null,
+          duration: null
+        });
+      });
+    });
+  };
+
+  const tryYtdlCore = async () => {
+    // Lazy-load only after global stubs/polyfills exist
+    const ytdl = require('@distube/ytdl-core');
+
+    // You can pass the whole URL; no need to extract ID
+    const info = await ytdl.getInfo(youtubeUrl);
+
+    // Prefer best muxed (video+audio)
+    const format = ytdl.chooseFormat(info.formats, {
       quality: 'highest',
       filter: 'videoandaudio'
     });
-    
-    if (!format) {
-      throw new Error('No suitable video format found');
+
+    if (!format || !format.url) {
+      throw new Error('No suitable format from ytdl-core');
     }
-    
-    console.log('Found video format:', format.qualityLabel, format.container);
-    
+
     return {
-      success: true,
       streamUrl: format.url,
-      title: info.videoDetails.title,
-      duration: info.videoDetails.lengthSeconds
+      title: info.videoDetails?.title || 'YouTube',
+      duration: info.videoDetails?.lengthSeconds || null
     };
-    
+  };
+
+  try {
+    console.log('Extracting video stream URL from:', youtubeUrl);
+
+    // Prefer yt-dlp (more resilient to cipher changes)
+    try {
+      const r = await tryYtDlp();
+      return { success: true, ...r };
+    } catch (e) {
+      console.warn('yt-dlp unavailable or failed; falling back to ytdl-core:', e.message);
+      const r = await tryYtdlCore();
+      return { success: true, ...r };
+    }
   } catch (error) {
     console.error('Error extracting video stream URL:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 });
 
 /**
  * Extract video ID from YouTube URL
  */
-function extractVideoId(url) {
-  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-  const match = url.match(regex);
+function extractVideoId(u) {
+  const regex = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\\s]{11})/;
+  const match = u && typeof u === 'string' ? u.match(regex) : null;
   return match ? match[1] : null;
 }
+
