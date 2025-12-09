@@ -1,5 +1,7 @@
 # BrainWaves Development Guide
 
+This 
+
 ## Project Structure
 
 ```
